@@ -1,0 +1,1162 @@
+---
+title: "Analysis for 'Can politicians’ answers to Voting Advice Applications be trusted?'"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 4
+    keep_md: yes
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+
+# Preparations
+
+Load packages (see package information at the very end of this document)
+
+```{r message=FALSE, warning=FALSE}
+library(rio)
+library(dplyr)
+library(psych)
+library(lavaan)
+library(semTools)
+library(sjlabelled)
+
+```
+
+Read data file
+
+```{r}
+df2019 <- import("../data/dat2019.xlsx")
+
+```
+
+Select variables used in the analysis and make sure the variable names are correct
+
+```{r}
+VAA_LR_items<-c("h26","h27","h25","h28","y19")
+VAA_LR_items %in% names(df2019)
+
+VAA_GT_items<-c("h21","h22","h13","h29","h24","y25")
+VAA_GT_items %in% names(df2019)
+
+CS_LR_items<-c("C2b","C2g","C2h")
+CS_LR_items %in% names(df2019)
+
+CS_GT_items<-c("C2a","C2c","C2d","C2e","C2f","C2i","C2j")
+CS_GT_items %in% names(df2019)
+
+#LR Self-placement
+CS_LR_SP<-c("C5a")
+CS_LR_SP %in% names(df2019)
+
+#LR imagined voter placement
+CS_LR_IP<-c("C5c")
+CS_LR_IP %in% names(df2019)
+
+Party_item<-c("puolue")
+Party_item %in% names(df2019)
+
+#vector for all item names
+
+all_items<-c(Party_item,
+             VAA_LR_items,
+             VAA_GT_items,
+             CS_LR_items,
+             CS_GT_items,
+             CS_LR_SP,
+             CS_LR_IP)
+
+#vector for all numeric item names
+
+num_items<-c(
+             VAA_LR_items,
+             VAA_GT_items,
+             CS_LR_items,
+             CS_GT_items,
+             CS_LR_SP,
+             CS_LR_IP)
+
+#vector for observed variables in CFA (and party)
+
+obs_items<-c(Party_item,
+             VAA_LR_items,
+             VAA_GT_items,
+             CS_LR_items,
+             CS_GT_items)
+
+#a vector for indicator variables
+
+ind_items<-c(
+             VAA_LR_items,
+             VAA_GT_items,
+             CS_LR_items,
+             CS_GT_items)
+
+#code all but party_item as numeric
+
+df2019[,num_items]<-sapply(df2019[,num_items],as.numeric)
+```
+
+Print the responses to the observed items
+
+```{r}
+for (i in 1:length(obs_items)){
+  print(obs_items[i])
+  print(table(df2019[,obs_items[i]],useNA="always"))
+  }
+```
+
+Data looks as it should!
+
+Exclude completely missing cases
+
+```{r}
+
+df2019$completely_missing<-
+  rowSums(is.na(df2019[,ind_items]))==length(ind_items)
+
+#number of completely missing cases
+table(df2019$completely_missing)
+
+#proportion of completely missing cases
+100*table(df2019$completely_missing)/nrow(df2019)
+
+#filter the used sample
+dat2019<-df2019 %>%
+  filter(!completely_missing)
+
+
+```
+
+Transform/Reverse code high scores on observed variable to indicate right and TAN positioning
+
+```{r}
+reverse_items<-c("h26","y19",
+                 "h21","h22","h13",
+                 "C2g","C2h",
+                 "C2c","C2e","C2i","C2j")
+
+reverse_items %in% names(dat2019)
+
+for (i in 1:length(reverse_items)){
+  dat2019[,reverse_items[i]]<-6-dat2019[,reverse_items[i]]
+}
+
+```
+
+\newpage
+
+# Analysis
+
+## Descriptive statistics
+
+```{r}
+#look what parties there are
+cbind(n=table(dat2019$puolue),
+      proportion=round(100*prop.table(table(dat2019$puolue)),2))
+
+#how many responded to VAAs (any)
+
+table(rowSums(is.na(dat2019[,c(VAA_LR_items,VAA_GT_items)]))!=
+        length(c(VAA_LR_items,VAA_GT_items)))
+
+#how many responded to CS (any)
+
+table(rowSums(is.na(dat2019[,c(CS_LR_items,CS_GT_items)]))!=
+        length(c(CS_LR_items,CS_GT_items)))
+
+#table for CS-items
+
+CS.item.table<-cbind.data.frame(
+  item=c(CS_LR_items,CS_GT_items),
+  description=c("The state should not interfere in economic activities",
+                "Providing a stable social security network should be a state priority (r.)",
+                "The state should take measures to reduce income disparities (r.)",
+                "Immigrants should adapt to Finnish habits",
+                "Stronger measures should be taken to protect the environment (r.)",
+                "Same Sex Marriages should be prohibited by law",
+                "Women should be favored in job search and promotion (r.)",
+                "People who break the law should be punished more severely",
+                "Immigrants are good for the Finnish economy (r.)",
+                "Deciding on abortion issues should be a women's right (r.)"),
+  round(data.frame(describe(dat2019[,c(CS_LR_items,CS_GT_items)],fast=T))[,c("n","mean","sd")],2))
+
+export(CS.item.table,"../results/Table2_CS.items.xlsx",overwrite=T)
+
+#table for VAA-items
+
+VAA.item.table<-cbind.data.frame(
+  item=c(VAA_LR_items,VAA_GT_items),
+  description=c("If there will be a situation where one is forced to either cut public services and social benefits or increase taxes, tax increases are a better choice (r.)",
+                "Large income inequalities are acceptable for compensating differences in people's talents and work ethic",
+                "Public services should be outsourced more than they are now for private companies",
+                "In the long run, the current extent of services and social benefits are too heavy for public economy",
+                "Public authorities should be the main provider of social and healthcare services (r.)",
+                "Gay and lesbian couples should have the same marriage and adoption rights as straight couples (r.)",
+                "If the government proposes to establish a refugee center in my home municipality, the proposal should be accepted (r.)",
+                "For Finland, the advantages of the EU outweigh the disadvantages (r.)",
+                "Economic growth and creation of jobs should be given primacy over environmental issues, when these two collide",
+                "Traditional values such as home, religion and fatherland form a good value base for politics",
+                "Finland must adopt tough measures to defend order and protect regular citizens"),
+  round(data.frame(describe(dat2019[,c(VAA_LR_items,VAA_GT_items)],fast=T))[,c("n","mean","sd")],2))
+
+export(VAA.item.table,"../results/Table1_VAA.items.xlsx",overwrite=T)
+
+```
+
+\newpage
+
+## H1 and H2
+
+H1. Left-Right placement as computed from responses to the pre-election public Voting Advice Applications (VAAs) is positively associated with Left-Right placement as computed from responses to the privately administered post-election Candidate Survey (CS). This association is stronger than any associations between the Left-Right and GAL-TAN dimensions.
+
+H2. GAL-TAN placement as computed from responses to the pre-election public Voting Advice Applications (VAAs) is positively associated with GAL-TAN placement as computed from responses to the privately administered post-election Candidate Survey (CS). This association is stronger than any associations between the Left-Right and GAL-TAN dimensions.
+
+### Model script
+
+```{r}
+
+
+model_H1H2<-"
+#loadings
+VAA_LR=~h26+h27+h25+h28+y19
+VAA_GT=~h21+h22+h13+h29+h24+y25
+CS_LR=~C2b+C2g+C2h
+CS_GT=~C2a+C2c+C2d+C2e+C2f+C2i+C2j
+
+#latent correlations
+
+#cross-dimension same-method
+VAA_LR~~r.VAA*VAA_GT
+CS_LR~~r.CS*CS_GT
+
+#concurrent validity
+VAA_LR~~r.LR*CS_LR
+VAA_GT~~r.GT*CS_GT
+
+#cross-dimension cross-method correlations
+VAA_LR~~r.d1*CS_GT
+VAA_GT~~r.d2*CS_LR
+
+#custom parameters
+test.H1:=r.LR-max(r.VAA,r.CS,r.d1,r.d2)
+test.H2:=r.GT-max(r.VAA,r.CS,r.d1,r.d2)
+
+"
+
+```
+
+### Fitting the model
+
+```{r}
+fit_H1H2<-cfa(model=model_H1H2,
+              data=dat2019,
+              missing="fiml")
+
+```
+
+Some problems with latent variable covariance structure
+
+```{r}
+lavInspect(fit_H1H2, "cov.lv")
+lavInspect(fit_H1H2, "cor.lv")
+
+
+#examine standardized estimates
+std.est_H1H2<-standardizedsolution(fit_H1H2)
+std.est_H1H2[std.est_H1H2$op=="~~" & 
+               std.est_H1H2$lhs!=std.est_H1H2$rhs,]
+
+
+
+```
+
+There is an impossible correlation between GAL-TAN latent variables (absolute value > 1)
+
+\newpage
+
+### Respecified model: introduce the three preregistered residual correlations
+
+Add the terms to the model script
+
+```{r}
+model_H1H2.re<-paste0(model_H1H2,
+                      "h27~~C2h\n",
+                      "h21~~C2d\n",
+                      "h29~~C2c\n")
+```
+
+### Fitting the respecified model
+
+```{r}
+fit_H1H2.re<-cfa(model=model_H1H2.re,
+              data=dat2019,
+              missing="fiml")
+
+```
+
+### Results
+
+Inspect fit of the model (first is the original model with problems,
+second is the respecified)
+
+```{r}
+round(inspect(fit_H1H2,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+
+round(inspect(fit_H1H2.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is adequate.
+
+Hypotheses 1 and 2
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H1H2<-standardizedsolution(fit_H1H2.re)
+std.est_H1H2[std.est_H1H2$op==":=" | 
+               std.est_H1H2$op=="~~" & 
+               std.est_H1H2$lhs!=std.est_H1H2$rhs,]
+
+#save to a file
+export(std.est_H1H2[std.est_H1H2$op!="~1",c(1:8)],
+           "../results/Table3_Overall_H1H2_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+H1: There is very strong (.915, p < .001) correlation between VAA-LR and CS-LR, and it is notably stronger (difference in correlations .492, p < .001) than the strongest of correlations between different dimensions (.424 between VAA_LR and VAA_GT, p < .001)
+
+H2: There is very strong (.990, p < .001) correlation between VAA-GT and CS-GT, and it is notably stronger (difference in correlations .566, p < .001) than the strongest of correlations between different dimensions (.424 between VAA_LR and VAA_GT, p < .001)
+
+\newpage
+
+### Exploratory analysis for H1 and H2: Seek misspecification to improve the overall model fit
+
+Residual correlations
+
+```{r}
+mis.rescor_H1H2<-miPowerFit(fit_H1H2.re,cor=.20)
+mis.rescor_H1H2<-mis.rescor_H1H2[mis.rescor_H1H2$op=="~~" & 
+                                   mis.rescor_H1H2$lhs!=mis.rescor_H1H2$rhs,]
+#see summary of the decisions
+table(mis.rescor_H1H2$decision.pow)
+
+#there are 1 residual correlation that is a misspecification
+
+rounded.vars<-c("mi","epc","target.epc",
+                "std.epc","se.epc")
+
+num.round<-function(var){
+  var<-as.numeric(var)
+  var<-round(var,2)
+  return(var)
+}
+
+mis.rescor_H1H2[,rounded.vars]<-
+  sapply(mis.rescor_H1H2[,rounded.vars],num.round)
+
+printed.vars<-c("lhs","op","rhs","mi","epc","target.epc",
+                "std.epc","std.target.epc","significant.mi",
+                "high.power","decision.pow","se.epc")
+
+#print the output
+
+mis.rescor_H1H2 %>%
+  filter(mis.rescor_H1H2$decision.pow=="M" | 
+                mis.rescor_H1H2$decision.pow=="EPC:M") %>%
+  dplyr::select(all_of(printed.vars)) 
+
+  
+```
+
+There was one misspecified residual correlation in VAA-LR, between
+h25. Public services should be outsourced more than they are now for private companies and y19. Public authorities should be the main provider of social and healthcare services (r.) 
+
+### Exploratory respecification of the model
+
+Add new parameter to the model script
+
+```{r}
+model_H1H2.exp.re<-paste0(model_H1H2.re,
+                      "h25~~y19")
+
+```
+
+### Fitting the exploratory model
+
+```{r}
+fit_H1H2.exp.re<-cfa(model=model_H1H2.exp.re,
+              data=dat2019,
+              missing="fiml")
+```
+
+### Results from the exploratory model
+
+```{r}
+round(inspect(fit_H1H2.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+
+round(inspect(fit_H1H2.exp.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is improved by additional residual correlation.
+
+Retest Hypotheses 1 and 2
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H1H2.exp<-standardizedsolution(fit_H1H2.exp.re)
+std.est_H1H2.exp[std.est_H1H2.exp$op==":=" | 
+               std.est_H1H2.exp$op=="~~" & 
+               std.est_H1H2.exp$lhs!=std.est_H1H2.exp$rhs,]
+
+#save to a file
+export(std.est_H1H2.exp[std.est_H1H2.exp$op!="~1",1:8],
+           "../results/TableS1_Overall_H1H2.exp_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+The results are virtually identical to those without the additional residual correlation. 
+
+H1.exp: There is very strong (.932, p < .001) correlation between VAA-LR and CS-LR, and it is notably stronger (difference in correlations .462, p < .001) than the strongest of correlations between different dimensions (.470 between VAA_LR and VAA_GT, p < .001)
+
+H2.exp: There is very strong (.990, p < .001) correlation between VAA-GT and CS-GT, and it is notably stronger (difference in correlations .520, p < .001) than the strongest of correlations between different dimensions (.470 between VAA_LR and VAA_GT, p < .001)
+
+\newpage
+
+## H5
+
+H5. Left-Right self-placement in the privately administered post-election Candidate Survey (CS) is positively associated with Left-Right as computed from responses to the pre-election public Voting Advice Applications (VAAs). This association is stronger than the association between placement of an imagined party voter in the privately administered post-election Candidate Survey (CS) and Left-Right as computed from responses to the pre-election public Voting Advice Applications (VAAs).
+
+### Add placement variables and their correlations with latent factors to the model used for H1 and H2
+
+```{r}
+
+
+model_H5<-"
+#loadings
+VAA_LR=~h26+h27+h25+h28+y19
+VAA_GT=~h21+h22+h13+h29+h24+y25
+CS_LR=~C2b+C2g+C2h
+CS_GT=~C2a+C2c+C2d+C2e+C2f+C2i+C2j
+
+#latent correlations
+
+#cross-dimension same-method
+VAA_LR~~r.VAA*VAA_GT
+CS_LR~~r.CS*CS_GT
+
+#convergent validity
+VAA_LR~~r.LR*CS_LR
+VAA_GT~~r.GT*CS_GT
+
+#cross-dimension cross-method correlations
+VAA_LR~~r.d1*CS_GT
+VAA_GT~~r.d2*CS_LR
+
+#residual correlations
+h27~~C2h
+h21~~C2d
+h29~~C2c
+
+#placement variables (defined as quasi-latent variables)
+
+SP_LR=~C5a
+IP_LR=~C5c
+
+VAA_LR~~r.self.LR*SP_LR
+VAA_LR~~r.ideal.LR*IP_LR
+
+#custom parameters
+test.H1:=r.LR-max(r.VAA,r.CS,r.d1,r.d2)
+test.H2:=r.GT-max(r.VAA,r.CS,r.d1,r.d2)
+test.H5:=r.self.LR-r.ideal.LR
+"
+
+```
+
+### Fit the model
+
+```{r}
+fit_H5<-cfa(model=model_H5,
+            data=dat2019,
+            missing="fiml")
+```
+
+
+### Results
+
+Inspect fit of the model
+
+```{r}
+round(inspect(fit_H5,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is adequate.
+
+Hypothesis 5
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H5<-standardizedsolution(fit_H5)
+std.est_H5[std.est_H5$op==":=" | 
+               std.est_H5$op=="~~" & 
+               std.est_H5$lhs!=std.est_H5$rhs,]
+
+#save to a file
+export(std.est_H5[std.est_H5$op!="~1",1:8],
+           "../results/Table4_Overall_H5_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+H5. The correlation between VAA_LR and CS Self-placement on LR is large (.829, p < .001) and larger than the association between VAA_LR and placement of imagined party voter (.739, p < .001; difference .090, p < .001)
+
+### Exploratory H5: Seek misspecifications
+
+Residual correlations
+
+```{r}
+mis.rescor_H5<-miPowerFit(fit_H5,cor=.20)
+mis.rescor_H5<-mis.rescor_H5[mis.rescor_H5$op=="~~" & 
+                                   mis.rescor_H5$lhs!=mis.rescor_H5$rhs,]
+#see summary of the decisions
+table(mis.rescor_H5$decision.pow)
+
+#there are 1 residual correlation that is a misspecification
+
+rounded.vars<-c("mi","epc","target.epc",
+                "std.epc","se.epc")
+
+num.round<-function(var){
+  var<-as.numeric(var)
+  var<-round(var,2)
+  return(var)
+}
+
+mis.rescor_H5[,rounded.vars]<-sapply(mis.rescor_H5[,rounded.vars],num.round)
+
+printed.vars<-c("lhs","op","rhs","mi","epc","target.epc",
+                "std.epc","std.target.epc","significant.mi",
+                "high.power","decision.pow","se.epc")
+
+#print the output
+
+mis.rescor_H5 %>%
+  filter(mis.rescor_H5$decision.pow=="M" | 
+                mis.rescor_H5$decision.pow=="EPC:M") %>%
+  dplyr::select(all_of(printed.vars)) 
+
+  
+```
+
+There was one misspecified residual correlation in VAA-LR, between
+h25. Public services should be outsourced more than they are now for private companies and y19. Public authorities should be the main provider of social and healthcare services (r.) 
+
+
+### Exploratory respecification of the model
+
+```{r}
+model_H5.exp<-paste0(model_H5,
+                      "h25~~y19")
+
+```
+
+```{r}
+fit_H5.exp<-cfa(model=model_H5.exp,
+              data=dat2019,
+              missing="fiml")
+```
+
+Inspect fit of the model
+
+```{r}
+round(inspect(fit_H5,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+
+round(inspect(fit_H5.exp,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is improved.
+
+Retest Hypothesis 5
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H5.exp<-standardizedsolution(fit_H5.exp)
+std.est_H5.exp[std.est_H5.exp$op==":=" | 
+               std.est_H5.exp$op=="~~" & 
+               std.est_H5.exp$lhs!=std.est_H5.exp$rhs,]
+
+#save to a file
+export(std.est_H5.exp[std.est_H5.exp$op!="~1",1:8],
+           "../results/TableS2_Overall_H5.exp_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+The results are virtually identical to those without the additional residual correlation.
+
+H5.exp. The correlation between VAA_LR and CS Self-placement on LR is large (.845, p < .001) and larger than the association between VAA_LR and placement of imagined party voter (.751, p < .001; difference .094, p < .001)
+
+
+\newpage
+
+## H3 and H4
+
+H3. Within-party placement on Left-Right as computed from responses to the pre-election public Voting Advice Applications (VAAs) is positively associated with within-party placement on Left-Right as computed from responses to the privately administered post-election Candidate Survey (CS). This association is stronger than any within-party associations between the Left-Right and GAL-TAN dimensions.
+
+H4. Within-party placement on GAL-TAN as computed from responses to the pre-election public Voting Advice Applications (VAAs) is positively associated with within-party placement on GAL-TAN as computed from responses to the privately administered post-election Candidate Survey (CS). This association is stronger than any within-party associations between the Left-Right and GAL-TAN dimensions. 
+
+Construct a new dataframe that exclude other than members of the eight parties that have multiple members in the parliament
+
+```{r}
+
+dat2019.party<-dat2019 %>%
+  filter(puolue=="KD" |
+           puolue=="KESK" |
+           puolue=="KOK" |
+           puolue=="PS" |
+           puolue=="RKP" |
+           puolue=="SDP" |
+           puolue=="VAS" |
+           puolue=="VIHR")
+
+table(dat2019.party$puolue)
+```
+
+
+### Model script
+
+Add names for group specific parameters
+
+```{r}
+
+
+model_H3H4<-"
+#loadings
+VAA_LR=~h26+h27+h25+h28+y19
+VAA_GT=~h21+h22+h13+h29+h24+y25
+CS_LR=~C2b+C2g+C2h
+CS_GT=~C2a+C2c+C2d+C2e+C2f+C2i+C2j
+
+#latent correlations
+
+#cross-dimension same-method
+VAA_LR~~c(r.VAA.KD,r.VAA.KESK,r.VAA.KOK,r.VAA.PS,r.VAA.RKP,r.VAA.SDP,r.VAA.VAS,r.VAA.VIHR)*VAA_GT
+CS_LR~~c(r.CS.KD,r.CS.KESK,r.CS.KOK,r.CS.PS,r.CS.RKP,r.CS.SDP,r.CS.VAS,r.CS.VIHR)*CS_GT
+
+#convergent validity
+VAA_LR~~c(r.LR.KD,r.LR.KESK,r.LR.KOK,r.LR.PS,r.LR.RKP,r.LR.SDP,r.LR.VAS,r.LR.VIHR)*CS_LR
+VAA_GT~~c(r.GT.KD,r.GT.KESK,r.GT.KOK,r.GT.PS,r.GT.RKP,r.GT.SDP,r.GT.VAS,r.GT.VIHR)*CS_GT
+
+#cross-dimension cross-method correlations
+VAA_LR~~c(r.d1.KD,r.d1.KESK,r.d1.KOK,r.d1.PS,r.d1.RKP,r.d1.SDP,r.d1.VAS,r.d1.VIHR)*CS_GT
+VAA_GT~~c(r.d2.KD,r.d2.KESK,r.d2.KOK,r.d2.PS,r.d2.RKP,r.d2.SDP,r.d2.VAS,r.d2.VIHR)*CS_LR
+
+#custom parameters
+mean.r.VAA:=mean(r.VAA.KD,r.VAA.KESK,r.VAA.KOK,r.VAA.PS,r.VAA.RKP,r.VAA.SDP,r.VAA.VAS,r.VAA.VIHR)
+mean.r.CS:=mean(r.CS.KD,r.CS.KESK,r.CS.KOK,r.CS.PS,r.CS.RKP,r.CS.SDP,r.CS.VAS,r.CS.VIHR)
+mean.r.LR:=mean(r.LR.KD,r.LR.KESK,r.LR.KOK,r.LR.PS,r.LR.RKP,r.LR.SDP,r.LR.VAS,r.LR.VIHR)
+mean.r.GT:=mean(r.GT.KD,r.GT.KESK,r.GT.KOK,r.GT.PS,r.GT.RKP,r.GT.SDP,r.GT.VAS,r.GT.VIHR)
+mean.r.d1:=mean(r.d1.KD,r.d1.KESK,r.d1.KOK,r.d1.PS,r.d1.RKP,r.d1.SDP,r.d1.VAS,r.d1.VIHR)
+mean.r.d2:=mean(r.d2.KD,r.d2.KESK,r.d2.KOK,r.d2.PS,r.d2.RKP,r.d2.SDP,r.d2.VAS,r.d2.VIHR)
+
+test.H3:=mean.r.LR-max(mean.r.VAA,mean.r.CS,mean.r.d1,mean.r.d2)
+test.H4:=mean.r.GT-max(mean.r.VAA,mean.r.CS,mean.r.d1,mean.r.d2)
+
+"
+
+```
+
+
+### Fit the configural model
+
+```{r}
+fit_H3H4<-cfa(model=model_H3H4,
+              data=dat2019.party,
+              group=c("puolue"),
+              group.label=c("KD","KESK","KOK","PS","RKP","SDP","VAS","VIHR"),
+              missing="fiml")
+
+```
+
+Problems with finding a converging model. Add preregistered residual correlations.
+
+### Respecify model by adding the residual correlations
+
+```{r}
+model_H3H4.re<-paste0(model_H3H4,
+                      "h27~~C2h\n",
+                      "h21~~C2d\n",
+                      "h29~~C2c\n")
+```
+
+### Fit the respecified model
+
+```{r}
+fit_H3H4.re<-cfa(model=model_H3H4.re,
+              data=dat2019.party,
+              group=c("puolue"),
+              group.label=c("KD","KESK","KOK","PS","RKP","SDP","VAS","VIHR"),
+              missing="fiml")
+
+```
+
+The problem persists
+
+\newpage
+
+## H3 and H4 with group-mean centered variables and no grouping structure
+
+### ICC: Estimate how much of the variation in each item is between-groups
+
+```{r}
+#there was problems running the mult.icc function to the data structure so 
+#data observed data was extracted from one of the previously fitted models
+#to get rid of all labels etc.
+num.dat.2019<-data.frame(fit_H5@Data@X,dat2019$puolue)
+names(num.dat.2019)<-c(fit_H5@Data@ov$name,"puolue")
+num.dat.2019<-num.dat.2019 %>%
+  filter(puolue=="KD" |
+           puolue=="KESK" |
+           puolue=="KOK" |
+           puolue=="PS" |
+           puolue=="RKP" |
+           puolue=="SDP" |
+           puolue=="VAS" |
+           puolue=="VIHR")
+
+
+ICC<-data.frame(
+  multilevel::mult.icc(x=num.dat.2019[,
+                                      all_items[2:length(all_items)]],
+                       grpid=num.dat.2019$puolue))
+ICC[,2:3]<-round(ICC[,2:3],3)
+ICC
+
+describe(100*ICC$ICC1,fast=T)
+
+#export 
+export(ICC,"../results/TableS3_ICC.xlsx",overwrite=T)
+
+```
+
+ICC1 gives the proportion (%) of variance that is between the parties (ICC2 is the reliability of the group means). There is quite a lot of between-party variance, but the responses are not entire defined by party either.
+
+\newpage
+
+### Variable centering
+
+```{r}
+
+dat2019.gmc<-data.frame(dat2019.party)
+
+na.mean<-function(var){
+  mean(var,na.rm=T)
+}
+
+group.means<-dat2019.gmc %>%
+  group_by(puolue) %>%
+  summarise_at(all_items[2:length(all_items)],na.mean)
+
+
+dat2019.gmc<-left_join(x=dat2019.gmc,
+                       y=group.means,
+                       by=c("puolue"),
+                       suffix=c("",".pm"))
+
+
+
+for(i in all_items[2:length(all_items)]){
+  dat2019.gmc[i]<-
+    dat2019.gmc[,i]-dat2019.gmc[,which(grepl(i,names(dat2019.gmc)) &
+                           grepl("pm",names(dat2019.gmc)) & 
+                     !grepl("r",names(dat2019.gmc))) ]
+}
+
+describe(dat2019.gmc[,all_items],fast=T)
+```
+
+\newpage
+
+### Define the model
+
+Identical to the model for H1 and H2
+
+```{r}
+
+
+model_H3H4<-"
+#loadings
+VAA_LR=~h26+h27+h25+h28+y19
+VAA_GT=~h21+h22+h13+h29+h24+y25
+CS_LR=~C2b+C2g+C2h
+CS_GT=~C2a+C2c+C2d+C2e+C2f+C2i+C2j
+
+#latent correlations
+
+#cross-dimension same-method
+VAA_LR~~r.VAA*VAA_GT
+CS_LR~~r.CS*CS_GT
+
+#concurrent validity
+VAA_LR~~r.LR*CS_LR
+VAA_GT~~r.GT*CS_GT
+
+#cross-dimension cross-method correlations
+VAA_LR~~r.d1*CS_GT
+VAA_GT~~r.d2*CS_LR
+
+#custom parameters
+test.H3:=r.LR-max(r.VAA,r.CS,r.d1,r.d2)
+test.H4:=r.GT-max(r.VAA,r.CS,r.d1,r.d2)
+
+"
+
+```
+
+
+
+### Fit the model
+
+```{r}
+fit_H3H4<-cfa(model=model_H3H4,
+              data=dat2019.gmc,
+              missing="fiml")
+
+```
+
+Problems with latent variable covariance matrix
+
+```{r}
+lavInspect(fit_H3H4, "cov.lv")
+lavInspect(fit_H3H4, "cor.lv")
+
+
+```
+
+There is a Heywood correlation between GAL-TAN latent variables (absolute value > 1)
+
+\newpage
+
+### Respecified model: introduce the three preregistered residual correlations
+
+```{r}
+model_H3H4.re<-paste0(model_H3H4,
+                      "h27~~C2h\n",
+                      "h21~~C2d\n",
+                      "h29~~C2c\n")
+```
+
+### Fitting the respecified model
+
+```{r}
+fit_H3H4.re<-cfa(model=model_H3H4.re,
+              data=dat2019.gmc,
+              missing="fiml")
+
+```
+
+### Results
+
+Inspect fit of the model
+
+```{r}
+round(inspect(fit_H3H4.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is quite poor according to CFI and TLI, but ok according to RMSEA and SRMR.
+
+Hypotheses 3 and 4
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H3H4.re<-standardizedsolution(fit_H3H4.re)
+std.est_H3H4.re[std.est_H3H4.re$op==":=" | 
+               std.est_H3H4.re$op=="~~" & 
+               std.est_H3H4.re$lhs!=std.est_H3H4.re$rhs,]
+
+#save to a file
+export(std.est_H3H4.re[std.est_H3H4.re$op!="~1",c(1:8)],
+           "../results/Table3_Unconfounded_H3H4_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+H3: There is strong (.782, p < .001) correlation between VAA-LR and CS-LR, and it is notably stronger (difference in correlations .593, p < .001) than the strongest of correlations between different dimensions (.189 between VAA_LR and VAA_GT, p = .006)
+
+H4: There is very strong (.956, p < .001) correlation between VAA-GT and CS-GT, and it is notably stronger (difference in correlations .767, p < .001) than the strongest of correlations between different dimensions (.189 between VAA_LR and VAA_GT, p = .006)
+
+\newpage
+
+### Exploratory analysis for H3 and H4: Seek misspecification to improve the overall model fit
+
+Residual correlations
+
+```{r}
+mis.rescor_H3H4<-miPowerFit(fit_H3H4.re,cor=.20)
+mis.rescor_H3H4<-mis.rescor_H3H4[mis.rescor_H3H4$op=="~~" & 
+                                   mis.rescor_H3H4$lhs!=mis.rescor_H3H4$rhs,]
+#see summary of the decisions
+table(mis.rescor_H3H4$decision.pow)
+
+#there are 2 residual correlation that are misspecifications
+
+rounded.vars<-c("mi","epc","target.epc",
+                "std.epc","se.epc")
+
+num.round<-function(var){
+  var<-as.numeric(var)
+  var<-round(var,2)
+  return(var)
+}
+
+mis.rescor_H3H4[,rounded.vars]<-sapply(mis.rescor_H3H4[,rounded.vars],num.round)
+
+printed.vars<-c("lhs","op","rhs","mi","epc","target.epc",
+                "std.epc","std.target.epc","significant.mi",
+                "high.power","decision.pow","se.epc")
+
+#print the output
+
+mis.rescor_H3H4 %>%
+  filter(mis.rescor_H3H4$decision.pow=="M" | 
+                mis.rescor_H3H4$decision.pow=="EPC:M") %>%
+  dplyr::select(all_of(printed.vars)) 
+
+  
+```
+
+There were two misspecified residual correlation.
+
+One was between VAA-LR items (same misspecification as was found for H1 and H2)
+H25. Public services should be outsourced more than they are now for private companies and y19. Public authorities should be the main provider of social and healthcare services (r.) 
+
+The other misspecification was between C2a. Immigrants should adapt to Finnish habits and C2f. People who break the law should be punished more severely 
+
+Re-specify the model to allow these parameters to be freely estimated
+
+### Exploratory respecification of the model
+
+```{r}
+model_H3H4.exp.re<-paste0(model_H3H4.re,
+                      "h25~~y19\n",
+                      "C2a~~C2f\n")
+
+```
+
+### Fitting the exploratory model
+
+```{r}
+fit_H3H4.exp.re<-cfa(model=model_H3H4.exp.re,
+              data=dat2019.gmc,
+              missing="fiml")
+```
+
+### Results from the exploratory model
+
+```{r}
+round(inspect(fit_H3H4.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+
+round(inspect(fit_H3H4.exp.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is improved
+
+Retest Hypotheses 4 and 5
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H3H4.exp.re<-standardizedsolution(fit_H3H4.exp.re)
+std.est_H3H4.exp.re[std.est_H3H4.exp.re$op==":=" | 
+               std.est_H3H4.exp.re$op=="~~" & 
+               std.est_H3H4.exp.re$lhs!=std.est_H3H4.exp.re$rhs,]
+
+
+#save to a file
+export(std.est_H3H4.exp.re[std.est_H3H4.exp.re$op!="~1",c(1:8)],
+           "../results/TableS1_Unconfounded_H3H4.exp_standardized_estimates.xlsx",
+       overwrite=T)
+
+```
+
+The results are virtually identical to those without the additional residual correlations.
+
+H3: There is a strong (.831, p < .001) correlation between VAA-LR and CS-LR, and it is notably stronger (difference in correlations .592, p < .001) than the strongest of correlations between different dimensions (.239 between VAA_LR and VAA_GT, p < .001)
+
+H4: There is a very strong (.957, p < .001) correlation between VAA-GT and CS-GT, and it is notably stronger (difference in correlations .718, p < .001) than the strongest of correlations between different dimensions (.239 between VAA_LR and VAA_GT, p < .001)
+
+\newpage
+
+## H6 with group mean centered observed variables
+
+H6. Within-party placement on Left-Right as computed from responses to the pre-election public Voting Advice Applications (VAAs) is positively associated with within-party placement on Left-Right as computed from responses to the privately administered post-election Candidate Survey (CS). This association is stronger than any within-party associations between the Left-Right and GAL-TAN dimensions. 
+
+### Add placement variables and their correlations with latent factors to the model used for H3 and H4
+
+Model already includes the three preregistered correlations
+
+```{r}
+
+model_H6<-paste0(model_H3H4.re,
+                 "SP_LR=~C5a\n",
+                 "IP_LR=~C5c\n",
+                 "VAA_LR~~r.self.LR*SP_LR\n",
+                 "VAA_LR~~r.ideal.LR*IP_LR\n",
+                 "test.H6:=r.self.LR-r.ideal.LR\n")
+
+
+```
+
+### Fit the model
+
+```{r}
+fit_H6<-cfa(model=model_H6,
+            data=dat2019.gmc,
+            missing="fiml")
+```
+
+
+Inspect fit of the model
+
+```{r}
+
+round(inspect(fit_H6,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+The fit of the model is ok based on rmsea and srmr, but poor according to cfi and tli
+
+Hypothesis 6
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H6<-standardizedsolution(fit_H6)
+std.est_H6[std.est_H6$op==":=" | 
+               std.est_H6$op=="~~" & 
+               std.est_H6$lhs!=std.est_H6$rhs,]
+
+#save to a file
+export(std.est_H6[std.est_H6$op!="~1",c(1:8)],
+           "../results/Table4_Unconfounded_H6_standardized_estimates.xlsx",
+       overwrite=T)
+```
+
+H6. The correlation between VAA_LR and CS Self-placement on LR is strong (.469, p < .001) and stronger than the association between VAA_LR and placement of imagined party voter (.069, p = .250; difference .400, p < .001)
+
+### Exploratory analysis of H6: Look for misspecifications
+
+
+Residual correlations
+
+```{r}
+mis.rescor_H6<-miPowerFit(fit_H6,cor=.20)
+mis.rescor_H6<-mis.rescor_H6[mis.rescor_H6$op=="~~" & 
+                                   mis.rescor_H6$lhs!=mis.rescor_H6$rhs,]
+#see summary of the decisions
+table(mis.rescor_H6$decision.pow)
+
+#there are is a single misspecification with .15 as criterion
+
+rounded.vars<-c("mi","epc","target.epc",
+                "std.epc","se.epc")
+
+num.round<-function(var){
+  var<-as.numeric(var)
+  var<-round(var,2)
+  return(var)
+}
+
+mis.rescor_H6[,rounded.vars]<-sapply(mis.rescor_H6[,rounded.vars],num.round)
+
+printed.vars<-c("lhs","op","rhs","mi","epc","target.epc",
+                "std.epc","std.target.epc","significant.mi",
+                "high.power","decision.pow","se.epc")
+
+#print the output
+
+mis.rescor_H6 %>%
+  filter(mis.rescor_H6$decision.pow=="M" | 
+                mis.rescor_H6$decision.pow=="EPC:M") %>%
+  dplyr::select(all_of(printed.vars)) 
+
+  
+```
+
+Same misspecifications as there were for model for H3 and H4
+
+Add to the model
+
+```{r}
+model_H6.re<-paste0(model_H6,
+                      "h25~~y19\n",
+                    "C2a~~C2f")
+
+```
+
+### Fit the respecified model
+
+```{r}
+fit_H6.re<-cfa(model=model_H6.re,
+              data=dat2019.gmc,
+              missing="fiml")
+```
+
+### Results
+
+```{r}
+round(inspect(fit_H6,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+
+round(inspect(fit_H6.re,"fit")
+      [c("npar","df","chisq","pvalue","cfi","tli","rmsea","srmr")],3)
+```
+
+Fit is improved.
+
+
+Print standardized estimates to test the difference between correlations
+
+```{r}
+std.est_H6.re<-standardizedsolution(fit_H6.re)
+std.est_H6.re[std.est_H6.re$op==":=" | 
+               std.est_H6.re$op=="~~" & 
+               std.est_H6.re$lhs!=std.est_H6.re$rhs,]
+
+#save to a file
+export(std.est_H6.re[std.est_H6.re$op!="~1",1:8],
+           "../results/TableS2_Unconfounded_H6.exp_standardized_estimates.xlsx",overwrite=T)
+
+```
+
+Results are virtually identical.
+
+H6. The correlation between VAA_LR and CS Self-placement on LR is moderately strong (.494, p < .001) and stronger than the association between VAA_LR and placement of imagined party voter (.072, p = .247; difference .422, p < .001)
+
+
+
+\newpage
+
+# Session information
+
+```{r}
+s<-sessionInfo()
+print(s,locale=F)
+```
